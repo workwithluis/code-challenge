@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: express-crud-api
+  labels:
+    app: express-crud-api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Zero downtime - always keep minimum replicas running
+  selector:
+    matchLabels:
+      app: express-crud-api
+  template:
+    metadata:
+      labels:
+        app: express-crud-api
+    spec:
+      containers:
+      - name: api
+        image: express-crud-api:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        - name: SHUTDOWN_TIMEOUT
+          value: "30000"  # 30 seconds for graceful shutdown
+        - name: READINESS_PROBE_DELAY
+          value: "5000"   # 5 seconds before marking as ready
+        - name: ENABLE_CLUSTERING
+          value: "false"  # Let K8s handle scaling instead of Node clustering
+        
+        # Resource limits
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: http
+          initialDelaySeconds: 10  # Wait for app to start
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Startup probe for slow starting containers
+        startupProbe:
+          httpGet:
+            path: /health/live
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30  # Allow up to 5 minutes for startup
+        
+        # Lifecycle hooks
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                # Send SIGTERM to Node.js process
+                kill -TERM 1
+                # Wait for graceful shutdown (should match SHUTDOWN_TIMEOUT)
+                sleep 35
+      
+      # Grace period for pod termination (should be longer than SHUTDOWN_TIMEOUT)
+      terminationGracePeriodSeconds: 45
+      
+      # Anti-affinity to spread pods across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - express-crud-api
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: express-crud-api
+  labels:
+    app: express-crud-api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: express-crud-api
+  sessionAffinity: None
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: express-crud-api-pdb
+spec:
+  minAvailable: 2  # Always keep at least 2 pods running
+  selector:
+    matchLabels:
+      app: express-crud-api
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: express-crud-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: express-crud-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+      - type: Percent
+        value: 10  # Scale down by 10% at a time
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60   # Scale up faster
+      policies:
+      - type: Percent
+        value: 50  # Scale up by 50% at a time
+        periodSeconds: 60

@@ -124,6 +124,7 @@ jspm_packages/
 .env.test.local
 .env.production.local
 .env.local
+!.env.example
 
 # parcel-bundler cache
 .cache
@@ -172,3 +173,13 @@ out
 
 # Misc
 .history/
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+database.sqlite
+
+# Package lock files (optional - uncomment if you want to ignore)
+# package-lock.json
+# yarn.lock

@@ -1,0 +1,288 @@
+name: Zero Downtime Deployment
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/express-crud-api
+  KUBERNETES_VERSION: '1.28'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run linter
+      run: npm run lint
+    
+    - name: Run tests
+      run: npm test -- --coverage
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage/lcov.info
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  deploy-staging:
+    if: github.ref == 'refs/heads/develop'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: v${{ env.KUBERNETES_VERSION }}
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+    
+    - name: Update deployment image
+      run: |
+        kubectl set image deployment/express-crud-api \
+          api=${{ needs.build.outputs.image-tag }} \
+          --namespace=staging \
+          --record
+    
+    - name: Wait for rollout to complete
+      run: |
+        kubectl rollout status deployment/express-crud-api \
+          --namespace=staging \
+          --timeout=10m
+    
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n staging -l app=express-crud-api
+        kubectl describe deployment express-crud-api -n staging
+
+  deploy-production:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: v${{ env.KUBERNETES_VERSION }}
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+    
+    - name: Check current deployment
+      id: current
+      run: |
+        CURRENT_IMAGE=$(kubectl get deployment express-crud-api -n production -o jsonpath='{.spec.template.spec.containers[0].image}')
+        echo "current-image=$CURRENT_IMAGE" >> $GITHUB_OUTPUT
+        echo "Current image: $CURRENT_IMAGE"
+    
+    - name: Create canary deployment
+      run: |
+        # Apply canary deployment (10% traffic)
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: express-crud-api-canary
+          namespace: production
+        spec:
+          selector:
+            app: express-crud-api
+            version: canary
+          ports:
+          - port: 80
+            targetPort: 3000
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: express-crud-api-canary
+          namespace: production
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: express-crud-api
+              version: canary
+          template:
+            metadata:
+              labels:
+                app: express-crud-api
+                version: canary
+            spec:
+              containers:
+              - name: api
+                image: ${{ needs.build.outputs.image-tag }}
+                ports:
+                - containerPort: 3000
+                env:
+                - name: NODE_ENV
+                  value: "production"
+                livenessProbe:
+                  httpGet:
+                    path: /health/live
+                    port: 3000
+                  initialDelaySeconds: 30
+                readinessProbe:
+                  httpGet:
+                    path: /health/ready
+                    port: 3000
+                  initialDelaySeconds: 10
+        EOF
+    
+    - name: Wait for canary to be ready
+      run: |
+        kubectl wait --for=condition=ready pod \
+          -l app=express-crud-api,version=canary \
+          -n production \
+          --timeout=5m
+    
+    - name: Run smoke tests on canary
+      run: |
+        CANARY_URL=$(kubectl get service express-crud-api-canary -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        # Health check
+        curl -f http://$CANARY_URL/health || exit 1
+        
+        # Basic API test
+        curl -f http://$CANARY_URL/api/v1/resources || exit 1
+        
+        echo "Canary smoke tests passed!"
+    
+    - name: Progressive rollout
+      run: |
+        # Update main deployment with new image
+        kubectl set image deployment/express-crud-api \
+          api=${{ needs.build.outputs.image-tag }} \
+          --namespace=production \
+          --record
+        
+        # Monitor rollout
+        kubectl rollout status deployment/express-crud-api \
+          --namespace=production \
+          --timeout=15m
+    
+    - name: Verify production deployment
+      run: |
+        # Check pod status
+        kubectl get pods -n production -l app=express-crud-api
+        
+        # Run health checks
+        PROD_URL=$(kubectl get service express-crud-api -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        for i in {1..10}; do
+          echo "Health check attempt $i..."
+          curl -f http://$PROD_URL/health && break
+          sleep 5
+        done
+    
+    - name: Cleanup canary
+      if: always()
+      run: |
+        kubectl delete deployment express-crud-api-canary -n production --ignore-not-found
+        kubectl delete service express-crud-api-canary -n production --ignore-not-found
+    
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "Deployment failed, rolling back..."
+        kubectl rollout undo deployment/express-crud-api -n production
+        kubectl rollout status deployment/express-crud-api -n production
+
+  post-deployment-tests:
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run integration tests
+      run: |
+        # Run your integration test suite against the deployed environment
+        npm run test:integration
+    
+    - name: Run performance tests
+      run: |
+        # Run performance tests
+        npm run test:performance
+    
+    - name: Notify deployment status
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: |
+          Deployment Status: ${{ job.status }}
+          Branch: ${{ github.ref }}
+          Commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}

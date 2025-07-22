@@ -1,0 +1,117 @@
+### Express CRUD API Examples
+### Base URL: http://localhost:3000/api/v1
+
+### Health Check
+GET http://localhost:3000/health
+
+### Create a new resource
+POST http://localhost:3000/api/v1/resources
+Content-Type: application/json
+
+{
+  "name": "Project Documentation",
+  "description": "Main project documentation and guidelines",
+  "type": "document",
+  "status": "active",
+  "metadata": {
+    "version": "1.0",
+    "author": "John Doe",
+    "tags": ["documentation", "guidelines"]
+  }
+}
+
+### Create another resource
+POST http://localhost:3000/api/v1/resources
+Content-Type: application/json
+
+{
+  "name": "API Specification",
+  "description": "REST API specification and endpoints",
+  "type": "document",
+  "status": "active",
+  "metadata": {
+    "version": "2.0",
+    "format": "OpenAPI"
+  }
+}
+
+### Create a different type of resource
+POST http://localhost:3000/api/v1/resources
+Content-Type: application/json
+
+{
+  "name": "User Profile Image",
+  "description": "Profile image for user account",
+  "type": "image",
+  "status": "active",
+  "metadata": {
+    "size": "2MB",
+    "dimensions": "800x600"
+  }
+}
+
+### List all resources
+GET http://localhost:3000/api/v1/resources
+
+### List resources with filters
+GET http://localhost:3000/api/v1/resources?type=document&status=active&limit=10&sortBy=created_at&sortOrder=desc
+
+### Search resources
+GET http://localhost:3000/api/v1/resources?search=API&limit=5
+
+### Get resource by ID (replace {id} with actual UUID)
+GET http://localhost:3000/api/v1/resources/{id}
+
+### Update resource (replace {id} with actual UUID)
+PUT http://localhost:3000/api/v1/resources/{id}
+Content-Type: application/json
+
+{
+  "name": "Updated Project Documentation",
+  "description": "Updated main project documentation with new sections",
+  "status": "inactive",
+  "metadata": {
+    "version": "1.1",
+    "author": "Jane Smith",
+    "lastModified": "2024-01-15"
+  }
+}
+
+### Partially update resource (replace {id} with actual UUID)
+PUT http://localhost:3000/api/v1/resources/{id}
+Content-Type: application/json
+
+{
+  "status": "archived"
+}
+
+### Delete resource (replace {id} with actual UUID)
+DELETE http://localhost:3000/api/v1/resources/{id}
+
+### Test validation error - missing required fields
+POST http://localhost:3000/api/v1/resources
+Content-Type: application/json
+
+{
+  "description": "This will fail because name and type are required"
+}
+
+### Test validation error - invalid status
+POST http://localhost:3000/api/v1/resources
+Content-Type: application/json
+
+{
+  "name": "Test Resource",
+  "type": "document",
+  "status": "invalid-status"
+}
+
+### Test 404 error - resource not found
+GET http://localhost:3000/api/v1/resources/00000000-0000-0000-0000-000000000000
+
+### Test pagination
+GET http://localhost:3000/api/v1/resources?limit=2&offset=0
+###
+GET http://localhost:3000/api/v1/resources?limit=2&offset=2
+###
+GET http://localhost:3000/api/v1/resources?limit=2&offset=4
