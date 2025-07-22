@@ -13,7 +13,7 @@ export class ResourceController {
       // Check validation errors
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        throw new AppError('Validation failed', 422, 'VALIDATION_FAILED');
+        throw new AppError('Validation failed', 400, 'VALIDATION_FAILED');
       }
 
       const resource = await resourceService.create(req.body);
@@ -90,7 +90,7 @@ export class ResourceController {
       // Check validation errors
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        throw new AppError('Validation failed', 422, 'VALIDATION_FAILED');
+        throw new AppError('Validation failed', 400, 'VALIDATION_FAILED');
       }
 
       const { id } = req.params;

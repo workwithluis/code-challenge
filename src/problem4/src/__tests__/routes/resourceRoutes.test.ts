@@ -46,7 +46,7 @@ describe('Resource Routes', () => {
       expect(response.headers['x-correlation-id']).toBeDefined();
     });
 
-    it('should return 422 for missing required fields', async () => {
+    it('should return 400 for missing required fields', async () => {
       const invalidResource = {
         description: 'Missing name and type',
       };
@@ -54,7 +54,7 @@ describe('Resource Routes', () => {
       const response = await request(app)
         .post('/api/v1/resources')
         .send(invalidResource)
-        .expect(422);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
       expect(response.body.error.code).toBe('VALIDATION_FAILED');
@@ -245,11 +245,11 @@ describe('Resource Routes', () => {
       expect(response.body.error.message).toBe('Resource not found');
     });
 
-    it('should return 422 for invalid status', async () => {
+    it('should return 400 for invalid status', async () => {
       const response = await request(app)
         .put(`/api/v1/resources/${resourceId}`)
         .send({ status: 'invalid-status' })
-        .expect(422);
+        .expect(400);
 
       expect(response.body.success).toBe(false);
       expect(response.body.error.code).toBe('VALIDATION_FAILED');

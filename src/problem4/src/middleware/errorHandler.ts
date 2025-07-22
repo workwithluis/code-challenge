@@ -34,12 +34,12 @@ export const errorHandler = (
   // Mongoose validation error
   if (err.name === 'ValidationError') {
     const message = 'Validation Error';
-    error = new AppError(message, 422, 'VALIDATION_ERROR');
+    error = new AppError(message, 400, 'VALIDATION_ERROR');
   }
 
   // Express validator errors
   if (err.message === 'Validation failed') {
-    error = new AppError('Validation failed', 422, 'VALIDATION_FAILED');
+    error = new AppError('Validation failed', 400, 'VALIDATION_FAILED');
   }
 
   // JSON parsing errors

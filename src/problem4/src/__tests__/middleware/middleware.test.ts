@@ -164,7 +164,7 @@ describe('Middleware Tests', () => {
         mockNext
       );
 
-      expect(mockResponse.status).toHaveBeenCalledWith(422);
+      expect(mockResponse.status).toHaveBeenCalledWith(400);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
         error: {
